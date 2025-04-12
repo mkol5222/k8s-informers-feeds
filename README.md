@@ -3,6 +3,9 @@
 Monitor Kubernetes allocating IPs to Pods using Informers K8S client API
 and redistribute as notifications to other services via MQTT messages.
 
+Following instructions are assuming usage or provided Github Codespace setup on this repo.
+
+
 ### Setup demo cluster and some apps
 
 ```bash
@@ -102,7 +105,8 @@ sudo mkdir -p /run/mosquitto && sudo chown mosquitto:mosquitto /run/mosquitto
 sudo service mosquitto stop
 sudo service mosquitto start
 sudo service mosquitto status
-# troubleshooting
+
+# troubleshooting, hopefully not needed ;-)
 sudo service mosquitto stop
 sudo mosquitto -c /etc/mosquitto/mosquitto.conf -v
 ```
@@ -115,7 +119,7 @@ sudo mosquitto -c /etc/mosquitto/mosquitto.conf -v
 # subscribe to a topic test/topic as client2 (read-only client)
 mosquitto_sub -h localhost -p 8883 --cafile ~/mosquitto/certs/ca.crt --cert ~/mosquitto/certs/client2.crt --key ~/mosquitto/certs/client2.key -t test/topic
 
-# other term - publish some message to the topic test/topic as RW client1
+# other terminal - publish some message to the topic test/topic as RW client1
 mosquitto_pub -h localhost -p 8883 --cafile ~/mosquitto/certs/ca.crt --cert ~/mosquitto/certs/client1.crt --key ~/mosquitto/certs/client1.key -t test/topic -m "Hello World at $(date)"
 
 # publish by RO client2 should fail (DENIED PUBLIUSH in mosquitto -v log)
@@ -142,14 +146,17 @@ Summary:
 cd /workspaces/k8s-informers-feeds
 go mod init k8s-informers-feeds
 go mod tidy
-go run monitor.go --help
-# or build
+
+# build - takes time (get a cup of coffee)
 go build -o monitor .
 ./monitor --help
 
 # start monitor connected to mqtt broker
 ./monitor -clusterId clu1 -mqttBroker ssl://127.0.0.1:8883 -ca ~/mosquitto/certs/ca.crt -cert ~/mosquitto/certs/client1.crt -key ~/mosquitto/certs/client1.key -listenOn :7788
+# other terminal - check the monitor events coming from the cluster on MQTT
+mosquitto_sub -h localhost -p 8883 --cafile ~/mosquitto/certs/ca.crt --cert ~/mosquitto/certs/client2.crt --key ~/mosquitto/certs/client2.key -t '#' -v
 
+# other terminal - check the feeds on HTTP requests
 # check feeds on port 7788
 # all pods
 curl localhost:7788/pods | jq .
@@ -166,15 +173,29 @@ curl localhost:7788/feed/clu1_app1_nginx | jq .
 # subscribe to the feed
 mosquitto_sub -h localhost -p 8883 --cafile ~/mosquitto/certs/ca.crt --cert ~/mosquitto/certs/client2.crt --key ~/mosquitto/certs/client2.key -t '#' -v
 
-# scale up
+# other terminal - scale up
 kubectl scale deployment nginx --replicas=5 --namespace app1
 kubectl scale deployment nginx --replicas=2 --namespace app1
 
-# notice message prefix
+# notice messages prefix
 # k8s-informers/refresh/feed/
 # full MQTT message: k8s-informers/refresh/feed/clu1_app1_nginx {"add":"","delete":"10.244.0.5"}
+```
 
-# TROUBLESHOOTING if mqtt broker refuses TLS connection - Test broker TLS on port 8883 with openssl s_client
+Summary:
+* built the monitor from source
+* familiar with monitor's command line arguments
+* connected the monitor to the MQTT broker using mTLS
+* selected monitor HTTP port to read feeds
+* checked state of Kubernetes IP lists of NS and Deployments
+* reviewed feed update messages on MQTT
+
+
+### Troubleshooting
+
+```shell
+### 
+# hopefully not needed - TROUBLESHOOTING if mqtt broker refuses TLS connection - Test broker TLS on port 8883 with openssl s_client
 openssl x509 -in ~/mosquitto/certs/server.crt -text -noout
 openssl x509 -in ~/mosquitto/certs/server.crt -text -noout | grep CN
 openssl x509 -in ~/mosquitto/certs/server.crt -text -noout | grep IP
