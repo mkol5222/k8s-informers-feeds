@@ -54,8 +54,11 @@ openssl genrsa -out ca.key 2048
 openssl req -x509 -new -nodes -key ca.key -sha256 -days 1024 -out ca.crt -subj "/C=US/ST=CA/L=San Francisco/O=My Company/CN=ca.example.com"
 # create a new server key
 openssl genrsa -out server.key 2048
-openssl req -new -key server.key -out server.csr -subj "/C=US/ST=CA/L=San Francisco/O=My Company/CN=localhost"
-openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 500
+openssl req -new -key server.key -out server.csr -subj "/C=US/ST=CA/L=San Francisco/O=My Company/CN=localhost" -addext "subjectAltName = DNS:localhost,DNS:example.com,IP:192.168.1.1,IP:127.0.0.1"
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 500 --extfile <(echo "subjectAltName = DNS:localhost,DNS:example.com,IP:192.168.1.1,IP:127.0.0.1" )
+openssl x509 -in server.crt -text -noout | grep CN
+openssl x509 -in server.crt -text -noout | grep IP
+openssl x509 -in server.crt -text -noout | grep DNS
 # create a new client1 key
 openssl genrsa -out client1.key 2048
 openssl req -new -key client1.key -out client1.csr -subj "/C=US/ST=CA/L=San Francisco/O=My Company/CN=client1.example.com"
@@ -114,6 +117,11 @@ mosquitto_sub -h localhost -p 8883 --cafile ~/mosquitto/certs/ca.crt --cert ~/mo
 
 # other term - publish some message to the topic test/topic as RW client1
 mosquitto_pub -h localhost -p 8883 --cafile ~/mosquitto/certs/ca.crt --cert ~/mosquitto/certs/client1.crt --key ~/mosquitto/certs/client1.key -t test/topic -m "Hello World at $(date)"
+
+# publish by RO client2 should fail (DENIED PUBLIUSH in mosquitto -v log)
+mosquitto_pub -h localhost -p 8883 --cafile ~/mosquitto/certs/ca.crt --cert ~/mosquitto/certs/client2.crt --key ~/mosquitto/certs/client2.key -t test/topic -m "Hello World at $(date)"
+
+
 # other console should receive the message
 ```
 
@@ -134,5 +142,42 @@ Summary:
 cd /workspaces/k8s-informers-feeds
 go mod init k8s-informers-feeds
 go mod tidy
-go run monitor.go --usage
+go run monitor.go --help
+# or build
+go build -o monitor .
+./monitor --help
+
+# start monitor connected to mqtt broker
+./monitor -clusterId clu1 -mqttBroker ssl://127.0.0.1:8883 -ca ~/mosquitto/certs/ca.crt -cert ~/mosquitto/certs/client1.crt -key ~/mosquitto/certs/client1.key -listenOn :7788
+
+# check feeds on port 7788
+# all pods
+curl localhost:7788/pods | jq .
+# namespace app1
+curl localhost:7788/ns/app1 | jq .
+# specific deployment
+kubectl get deploy -A
+curl localhost:7788/app/web | jq .
+curl localhost:7788/app/nginx | jq .
+# feed is made by clusterId_namespace_app
+curl localhost:7788/feed/clu1_app1_nginx | jq .
+
+# now we subscribe to the feed and will start scaling up and down
+# subscribe to the feed
+mosquitto_sub -h localhost -p 8883 --cafile ~/mosquitto/certs/ca.crt --cert ~/mosquitto/certs/client2.crt --key ~/mosquitto/certs/client2.key -t '#' -v
+
+# scale up
+kubectl scale deployment nginx --replicas=5 --namespace app1
+kubectl scale deployment nginx --replicas=2 --namespace app1
+
+# notice message prefix
+# k8s-informers/refresh/feed/
+# full MQTT message: k8s-informers/refresh/feed/clu1_app1_nginx {"add":"","delete":"10.244.0.5"}
+
+# TROUBLESHOOTING if mqtt broker refuses TLS connection - Test broker TLS on port 8883 with openssl s_client
+openssl x509 -in ~/mosquitto/certs/server.crt -text -noout
+openssl x509 -in ~/mosquitto/certs/server.crt -text -noout | grep CN
+openssl x509 -in ~/mosquitto/certs/server.crt -text -noout | grep IP
+openssl x509 -in ~/mosquitto/certs/server.crt -text -noout | grep DNS
+openssl s_client -connect 127.0.0.1:8883 -servername localhost -CAfile ~/mosquitto/certs/ca.crt -cert ~/mosquitto/certs/client1.crt -key ~/mosquitto/certs/client1.key
 ```
