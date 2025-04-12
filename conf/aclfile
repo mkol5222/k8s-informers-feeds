@@ -1,0 +1,7 @@
+# Full access client
+user client1.example.com
+topic readwrite #
+
+# Read-only client
+user client2.example.com
+topic read #
